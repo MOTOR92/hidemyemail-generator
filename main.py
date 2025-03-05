@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import aiofiles
 import os
 from typing import Union, List, Optional
 import re
@@ -12,7 +13,11 @@ from rich.table import Table
 from icloud import HideMyEmail
 
 
-MAX_CONCURRENT_TASKS = 10
+MAX_CONCURRENT_TASKS = 1
+
+async def write_email_to_file(email: str, filename: str = 'emails.txt'):
+    async with aiofiles.open(filename, 'a') as f:
+        await f.write(email + '\n')
 
 
 class RichHideMyEmail(HideMyEmail):
@@ -45,9 +50,14 @@ class RichHideMyEmail(HideMyEmail):
                 err_msg = gen_res["reason"]
             elif type(error) == dict and "errorMessage" in error:
                 err_msg = error["errorMessage"]
-            self.console.log(
-                f"[bold red][ERR][/] - Failed to generate email. Reason: {err_msg}"
-            )
+
+            # Check if the error is due to reaching the generation limit
+            if "limit" in err_msg.lower():
+                self.console.log(f"[bold red][ERR][/] - Reached email generation limit. Waiting for 10 minutes.")
+                await asyncio.sleep(600)  # Sleep for 10 minutes before retrying
+            else:
+                self.console.log(f"[bold red][ERR][/] - Failed to generate email. Reason: {err_msg}")
+                await asyncio.sleep(30)
             return
 
         email = gen_res["result"]["hme"]
@@ -65,18 +75,20 @@ class RichHideMyEmail(HideMyEmail):
                 err_msg = reserve_res["reason"]
             elif type(error) == dict and "errorMessage" in error:
                 err_msg = error["errorMessage"]
-            self.console.log(
-                f'[bold red][ERR][/] "{email}" - Failed to reserve email. Reason: {err_msg}'
-            )
+            self.console.log(f'[bold red][ERR][/] "{email}" - Failed to reserve email. Reason: {err_msg} Waiting for 10 minutes.')
+            await asyncio.sleep(600)  # Sleep for 30 seconds before retrying
             return
 
         self.console.log(f'[100%] "{email}" - Successfully reserved')
+        await write_email_to_file(email=email)
         return email
+
 
     async def _generate(self, num: int):
         tasks = []
         for _ in range(num):
             task = asyncio.ensure_future(self._generate_one())
+            await asyncio.sleep(3)
             tasks.append(task)
 
         return filter(lambda e: e is not None, await asyncio.gather(*tasks))
@@ -104,7 +116,7 @@ class RichHideMyEmail(HideMyEmail):
                     emails += batch
 
             if len(emails) > 0:
-                with open("emails.txt", "a+") as f:
+                with open("emails_total.txt", "a+") as f:
                     f.write(os.linesep.join(emails) + os.linesep)
 
                 self.console.rule()
